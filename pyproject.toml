@@ -1,0 +1,47 @@
+[project]
+name = "janusium"
+version = "1.0.0"
+description = "Selenium-based browser automation toolkit with anti-detection Chrome/Firefox drivers."
+authors = [
+    {name = "Jancel", email = "ja.alvarezgom@gmail.com"},
+]
+dependencies = [
+    "selenium>=4.0.0",
+]
+requires-python = ">=3.11"
+readme = "README.md"
+license = {text = "MIT"}
+keywords = ["selenium", "webdriver", "browser-automation", "scraping", "chrome", "firefox", "anti-detection"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+]
+
+[project.urls]
+Homepage = "https://github.com/jalvarezgom/Janusium"
+Repository = "https://github.com/jalvarezgom/Janusium"
+Issues = "https://github.com/jalvarezgom/Janusium/issues"
+
+[project.optional-dependencies]
+chrome = ["webdriver-manager>=4.0.0"]
+undetected = ["undetected-chromedriver>=3.5.0"]
+all = ["janusium[chrome,undetected]"]
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+
+[tool.pdm]
+distribution = true
+
+[dependency-groups]
+test = [
+    "pytest>=9.1.1",
+]
