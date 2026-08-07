@@ -26,28 +26,26 @@ class FirefoxDriver(SeleniumDriver):
     _driver_type = "Firefox"
     use_service = False
 
-    def __init__(self, **options):
+    def __init__(self, executable_path=None, log_path=None, service_args=None, **base_options):
         """
         Initializes the Firefox driver with optional GeckoDriver service
         parameters.
 
         Args:
-            **options: Optional keyword arguments for the GeckoDriver service:
-
-                - ``executable_path`` (str): Absolute path to the
-                  ``geckodriver`` binary.  When omitted, Selenium resolves
-                  the binary from the system ``PATH``.
-                - ``log_path`` (str): Path to the GeckoDriver log file.
-                - ``service_args`` (list[str]): Additional arguments passed
-                  to the GeckoDriver service process.
+            executable_path (str, optional): Absolute path to the
+                ``geckodriver`` binary.  When omitted, Selenium resolves
+                the binary from the system ``PATH``.
+            log_path (str, optional): Path to the GeckoDriver log file.
+            service_args (list[str], optional): Additional arguments passed
+                to the GeckoDriver service process.
+            **base_options: Forwarded to :meth:`SeleniumDriver.__init__`
+                (e.g. ``headless_browser``, ``wait_seconds``,
+                ``download_directory``, ``logger``).
         """
-        self.executable_path = None
-        self.log_path = None
-        self.service_args = None
-        if options:
-            self.executable_path = options.get("executable_path")
-            self.log_path = options.get("log_path")
-            self.service_args = options.get("service_args")
+        super().__init__(**base_options)
+        self.executable_path = executable_path
+        self.log_path = log_path
+        self.service_args = service_args
 
     def setup(self):
         """

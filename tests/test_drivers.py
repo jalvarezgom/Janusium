@@ -1,5 +1,6 @@
 from janusium.drivers import ChromeDriver, FirefoxDriver, UndetectedChromeDriver
 from janusium.drivers.selenium import SeleniumDriver
+from janusium.statistics import StatisticsSelenium
 
 
 def test_chrome_driver_is_a_selenium_driver_with_correct_type():
@@ -35,3 +36,11 @@ def test_firefox_driver_defaults_service_options_to_none():
     assert driver.executable_path is None
     assert driver.log_path is None
     assert driver.service_args is None
+
+
+def test_firefox_driver_initializes_base_selenium_driver_state():
+    driver = FirefoxDriver(headless_browser=False, wait_seconds=7)
+
+    assert isinstance(driver.statistics, StatisticsSelenium)
+    assert driver.headless_browser is False
+    assert driver.wait_seconds == 7
