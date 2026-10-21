@@ -1,7 +1,7 @@
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 
-from janusium.drivers.selenium import SeleniumDriver
+from src.libs.SeleniumConnectPy.drivers.selenium import SeleniumDriver
 from selenium.webdriver.firefox.service import Service as FirefoxService
 
 
@@ -25,27 +25,74 @@ class FirefoxDriver(SeleniumDriver):
 
     _driver_type = "Firefox"
     use_service = False
+    DEFAULT_ARGUMENTS = ()
+    HEADLESS_ARGUMENT = "--headless"
+    DEFAULT_PREFERENCES = (
+        ("browser.download.folderList", 2),
+        ("browser.download.manager.showWhenStarting", False),
+        ("browser.helperApps.neverAsk.openFile", "text/csv,application/vnd.ms-excel;application/xls"),
+        (
+            "browser.helperApps.neverAsk.saveToDisk",
+            "text/csv,application/vnd.ms-excel,application/xls,"
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.template,"
+            "application/vnd.ms-excel.sheet.macroEnabled.12,"
+            "application/vnd.ms-excel.template.macroEnabled.12,"
+            "application/vnd.ms-excel.addin.macroEnabled.12,"
+            "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
+        ),
+        ("pdfjs.disabled", True),
+    )
 
-    def __init__(self, executable_path=None, log_path=None, service_args=None, **base_options):
+    def __init__(self, **options):
         """
         Initializes the Firefox driver with optional GeckoDriver service
         parameters.
 
         Args:
-            executable_path (str, optional): Absolute path to the
-                ``geckodriver`` binary.  When omitted, Selenium resolves
-                the binary from the system ``PATH``.
-            log_path (str, optional): Path to the GeckoDriver log file.
-            service_args (list[str], optional): Additional arguments passed
-                to the GeckoDriver service process.
-            **base_options: Forwarded to :meth:`SeleniumDriver.__init__`
-                (e.g. ``headless_browser``, ``wait_seconds``,
-                ``download_directory``, ``logger``).
+            **options: Optional keyword arguments for the GeckoDriver service:
+
+                - ``executable_path`` (str): Absolute path to the
+                  ``geckodriver`` binary.  When omitted, Selenium resolves
+                  the binary from the system ``PATH``.
+                - ``log_path`` (str): Path to the GeckoDriver log file.
+                - ``service_args`` (list[str]): Additional arguments passed
+                  to the GeckoDriver service process.
         """
-        super().__init__(**base_options)
-        self.executable_path = executable_path
-        self.log_path = log_path
-        self.service_args = service_args
+        self.executable_path = None
+        self.log_path = None
+        self.service_args = None
+        self.custom_preferences = list(options.get("custom_preferences") or ())
+        if options:
+            self.executable_path = options.get("executable_path")
+            self.log_path = options.get("log_path")
+            self.service_args = options.get("service_args")
+        super().__init__(
+            browser=options.get("browser"),
+            headless_browser=options.get("headless_browser", True),
+            wait_seconds=options.get("wait_seconds", 3),
+            download_directory=options.get("download_directory"),
+            logger=options.get("logger"),
+            custom_arguments=options.get("custom_arguments"),
+        )
+
+    def add_argument(self, name: str, value):
+        """Add a Firefox preference; browser CLI arguments are handled internally."""
+        if not isinstance(name, str) or not name:
+            raise ValueError("Firefox preference names must be non-empty strings")
+        self.custom_preferences.append((name, value))
+        return self
+
+    add_preference = add_argument
+
+    def _iter_browser_arguments(self):
+        """Yield only Firefox CLI arguments managed by this driver (headless)."""
+        if self.headless_browser:
+            yield self.HEADLESS_ARGUMENT
+
+    def _iter_preferences(self):
+        yield from self.DEFAULT_PREFERENCES
+        yield from self.custom_preferences
 
     def setup(self):
         """
@@ -81,23 +128,11 @@ class FirefoxDriver(SeleniumDriver):
         download_directory = self.download_directory.replace("/", "\\")
         options = Options()
         # options.set_preference("browser.privatebrowsing.autostart", True)
-        options.set_preference("browser.download.folderList", 2)
-        options.set_preference("browser.download.manager.showWhenStarting", False)
+        for name, value in self._iter_preferences():
+            options.set_preference(name, value)
         options.set_preference("browser.download.dir", rf"{download_directory}")
-        options.set_preference("browser.helperApps.neverAsk.openFile", "text/csv,application/vnd.ms-excel;application/xls")
-        options.set_preference(
-            "browser.helperApps.neverAsk.saveToDisk",
-            "text/csv,application/vnd.ms-excel,application/xls,"
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.template,"
-            "application/vnd.ms-excel.sheet.macroEnabled.12,"
-            "application/vnd.ms-excel.template.macroEnabled.12,"
-            "application/vnd.ms-excel.addin.macroEnabled.12,"
-            "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
-        )
-        options.set_preference("pdfjs.disabled", True)
-        if self.headless_browser:
-            options.add_argument("--headless")
+        for argument in self._iter_browser_arguments():
+            options.add_argument(argument)
         # Related: https://stackoverflow.com/questions/66597600/how-to-connect-to-standalone-selenium-firefox-container-from-another-container
         if self.executable_path:
             service = FirefoxService(executable_path=self.executable_path, log_path=self.log_path, service_args=self.service_args)

@@ -31,7 +31,8 @@ Issues = "https://github.com/jalvarezgom/Janusium/issues"
 [project.optional-dependencies]
 chrome = ["webdriver-manager>=4.0.0"]
 undetected = ["undetected-chromedriver>=3.5.0"]
-all = ["janusium[chrome,undetected]"]
+seleniumbase = ["seleniumbase>=4.35.0"]
+all = ["janusium[chrome,undetected,seleniumbase]"]
 
 [build-system]
 requires = ["pdm-backend"]

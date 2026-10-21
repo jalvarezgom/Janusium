@@ -2,7 +2,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
-from janusium.drivers.selenium import SeleniumDriver
+from src.libs.SeleniumConnectPy.drivers.selenium import SeleniumDriver
 
 
 class ChromeDriver(SeleniumDriver):
@@ -28,6 +28,12 @@ class ChromeDriver(SeleniumDriver):
     """
 
     _driver_type = "Chrome"
+    DEFAULT_ARGUMENTS = (
+        "--disable-blink-features=AutomationControlled", "--window-size=1920,1080",
+        "--start-maximized", "--no-sandbox", "--disable-dev-shm-usage",
+        "--disable-extensions", "--disable-infobars",
+    )
+    HEADLESS_ARGUMENT = "--headless=new"
 
     def _launch_browser(self):
         """
@@ -53,16 +59,8 @@ class ChromeDriver(SeleniumDriver):
         """
         options = webdriver.ChromeOptions()
 
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_argument(f"--user-agent={self.get_random_user_agent()}")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("--start-maximized")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-extensions")
-        options.add_argument("--disable-infobars")
-        if self.headless_browser:
-            options.add_argument("--headless=new")
+        for argument in (*self._iter_browser_arguments(), f"--user-agent={self.get_random_user_agent()}"):
+            options.add_argument(argument)
         host_rules = self._build_host_rules_argument()
         if host_rules:
             options.add_argument(f"--host-rules={host_rules}")

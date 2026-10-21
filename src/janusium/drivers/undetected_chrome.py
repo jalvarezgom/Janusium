@@ -1,6 +1,7 @@
 import undetected_chromedriver as uc
 
-from janusium.drivers.selenium import SeleniumDriver
+from environment import Environment
+from src.libs.SeleniumConnectPy.drivers.selenium import SeleniumDriver
 
 
 class UndetectedChromeDriver(SeleniumDriver):
@@ -22,6 +23,9 @@ class UndetectedChromeDriver(SeleniumDriver):
       browser environment.
     - Realistic window size (``1920×1080``) avoids headless-specific
       viewport signatures.
+    - Optional Chrome version pin through
+      ``Environment.SETTINGS.BROWSER.CHROME_VERSION`` ensures the correct
+      driver binary is used when a specific Chrome version is installed.
 
     Inherits all network filtering capabilities from
     :class:`~SeleniumConnectPy.drivers.selenium.SeleniumDriver`:
@@ -31,10 +35,15 @@ class UndetectedChromeDriver(SeleniumDriver):
     """
 
     _driver_type = "UndetectedChrome"
+    DEFAULT_ARGUMENTS = (
+        "--disable-blink-features=AutomationControlled", "--window-size=1920,1080",
+        "--start-maximized", "--no-sandbox", "--disable-dev-shm-usage",
+        "--disable-extensions", "--disable-infobars",
+    )
+    HEADLESS_ARGUMENT = "--headless=new"
 
     def __del__(self):
-        if self._browser is not None:
-            self._browser.quit()
+        self._browser.quit()
 
     def _launch_browser(self):
         """
@@ -49,25 +58,19 @@ class UndetectedChromeDriver(SeleniumDriver):
            :attr:`NETWORK_DOMAIN_WHITELIST` is set.
         3. Configures automatic file downloads to
            :attr:`~SeleniumDriver.download_tmp_directory`.
-        4. Overrides ``navigator.webdriver``, ``navigator.languages``, and
+        4. Resolves the Chrome version pin from
+           ``Environment.SETTINGS.BROWSER.CHROME_VERSION`` (if set) and
+           creates the ``uc.Chrome`` instance with ``use_subprocess=True``.
+        5. Overrides ``navigator.webdriver``, ``navigator.languages``, and
            ``navigator.plugins`` via ``Page.addScriptToEvaluateOnNewDocument``
            to reduce the automation fingerprint.
-        5. Applies extension-based request blocking via CDP
+        6. Applies extension-based request blocking via CDP
            (:meth:`~SeleniumDriver._setup_network_extension_filter`).
         """
         options = uc.ChromeOptions()
 
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_argument(f"--user-agent={self.get_random_user_agent()}")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("--start-maximized")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-extensions")
-        options.add_argument("--disable-infobars")
-
-        if self.headless_browser:
-            options.add_argument("--headless=new")
+        for argument in (*self._iter_browser_arguments(), f"--user-agent={self.get_random_user_agent()}"):
+            options.add_argument(argument)
         host_rules = self._build_host_rules_argument()
         if host_rules:
             options.add_argument(f"--host-rules={host_rules}")
@@ -84,6 +87,8 @@ class UndetectedChromeDriver(SeleniumDriver):
         )
 
         params = {}
+        if Environment.SETTINGS.BROWSER.CHROME_VERSION:
+            params["version_main"] = Environment.SETTINGS.BROWSER.CHROME_VERSION
         self._browser = uc.Chrome(options=options, use_subprocess=True, **params)
         self._setup_network_extension_filter()
         self._browser.execute_cdp_cmd(

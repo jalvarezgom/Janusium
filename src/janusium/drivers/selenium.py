@@ -1,15 +1,18 @@
+from __future__ import annotations
+
 import logging
 import os.path
 import random
 import time
 from abc import ABC
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Iterable, Iterator, Mapping, Optional
 
 from selenium.webdriver.remote.webdriver import WebDriver
+from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.wait import WebDriverWait
 
-from janusium.statistics import StatisticsSelenium
+from libs.SeleniumConnectPy.statistics import StatisticsSelenium
 
 _SELENIUM_USER_AGENTS = [
     # Chrome - Windows 10
@@ -45,18 +48,41 @@ class SeleniumDriver(ABC):
     """
     Abstract base class for Selenium drivers.
 
-    Defines the interface and shared logic for initializing, configuring, and
-    operating web browsers through Selenium WebDriver.
+    Provides shared browser configuration and lifecycle management, scraper
+    execution, browser actions, network filtering, and utility methods. Concrete
+    drivers implement :meth:`_launch_browser` and :meth:`_run`.
 
     Attributes:
         initial_url (str): Starting URL the browser will navigate to on launch.
         _download_directory (str): Path to the download directory.
         headless_browser (bool): Whether the browser runs in headless mode.
-        wait_seconds (int): Maximum implicit wait time in seconds.
+        wait_seconds (int): Timeout in seconds used for browser waits.
         _driver_type: Type of driver in use (Chrome, Firefox, etc.).
         _browser (WebDriver): Selenium WebDriver instance.
         _wait_driver (WebDriverWait): Selenium explicit wait instance.
-        required_fields (list): List of mandatory fields required for execution.
+        required_fields (list): Fields required by :meth:`run` and the
+            subclass's :meth:`_run` implementation.
+        custom_arguments (list[str]): Browser command-line arguments supplied
+            by the caller.
+        NETWORK_BLOCKED_EXTENSIONS (list[str]): File extensions blocked on
+            supported Chromium browsers.
+        NETWORK_DOMAIN_WHITELIST (list[str]): Domains allowed by Chromium host
+            rules when a subclass applies them.
+        DEFAULT_ARGUMENTS (tuple[str, ...]): Browser arguments supplied by a
+            concrete driver before caller-provided arguments.
+
+    Core methods:
+        ``setup``, ``run``, and ``teardown_class`` manage browser and scraper
+        lifecycle. Subclasses implement ``_launch_browser`` and ``_run``.
+
+    Actions:
+        ``go_to_url``, ``send_keys``, and ``click_element`` control browser
+        navigation and page elements. Network filter methods configure
+        Chromium request and host rules.
+
+    Utilities:
+        Argument helpers, download cleanup, random user-agent and delay
+        helpers, logging, and representation support reusable driver code.
     """
 
     initial_url = None
@@ -73,6 +99,11 @@ class SeleniumDriver(ABC):
     # [NETWORK]
     NETWORK_BLOCKED_EXTENSIONS: list[str] = []  # e.g. [".jpg", ".png", ".css", ".woff2"].
     NETWORK_DOMAIN_WHITELIST: list[str] = []
+    DEFAULT_ARGUMENTS: tuple[str, ...] = ()
+    DOWNLOAD_DIRECTORY_REQUIRED = True
+
+    # ------------------------------------------------------------------ Core
+    # Browser configuration, lifecycle, validation, and scraper execution.
 
     def __init__(
         self,
@@ -81,7 +112,9 @@ class SeleniumDriver(ABC):
         wait_seconds: int = 3,
         download_directory: Optional[str] = None,
         logger: Optional[logging.Logger] = None,
-    ):
+        custom_arguments: Optional[Iterable[str]] = None,
+        **kwargs: Any,
+    ) -> None:
         """
         Initializes the driver with basic browser options.
 
@@ -95,19 +128,51 @@ class SeleniumDriver(ABC):
                 elements.  Defaults to ``3``.
             download_directory (str, optional): Absolute path to the directory
                 where downloaded files will be stored.
-            logger (logging.Logger, optional): Logger instance for recording
-                messages.  If not provided, a default logger is created using
-                the module name.
+            logger (logging.Logger, optional): Logger used for driver messages.
+                Defaults to a logger named after this module.
+            custom_arguments (Iterable[str], optional): Browser command-line
+                arguments to add when the browser is launched. Each argument
+                must be a non-empty string.
+            **kwargs: Additional options accepted by concrete driver classes.
         """
         if browser:
             self._browser = browser
         self.headless_browser = headless_browser
         self.wait_seconds = wait_seconds
         self._download_directory = self._download_directory or download_directory
-        self.logger = logger or logging.getLogger(__name__)
+        self.logger = logger if logger is not None else logging.getLogger("janisium")
         self.statistics = StatisticsSelenium()
+        if isinstance(custom_arguments, str):
+            raise TypeError("custom_arguments must be an iterable of argument strings, not a string")
+        self.custom_arguments = list(custom_arguments or ())
+        if any(not isinstance(argument, str) or not argument for argument in self.custom_arguments):
+            raise ValueError("Browser arguments must be non-empty strings")
 
-    def setup(self):
+    def add_argument(self, argument: str) -> SeleniumDriver:
+        """Add a custom browser command-line argument before setup."""
+        if not isinstance(argument, str) or not argument:
+            raise ValueError("Browser arguments must be non-empty strings")
+        self.custom_arguments.append(argument)
+        return self
+
+    def add_arguments(self, arguments: Iterable[str]) -> SeleniumDriver:
+        """Add multiple custom browser command-line arguments."""
+        if isinstance(arguments, str):
+            raise TypeError("arguments must be an iterable of argument strings, not a string")
+        for argument in arguments:
+            self.add_argument(argument)
+        return self
+
+    def _iter_browser_arguments(self) -> Iterator[str]:
+        """Yield driver defaults followed by caller-provided arguments."""
+        yield from self.DEFAULT_ARGUMENTS
+        yield from self.custom_arguments
+        if self.headless_browser:
+            yield self.HEADLESS_ARGUMENT
+
+    HEADLESS_ARGUMENT = "--headless"
+
+    def setup(self) -> SeleniumDriver:
         """
         Configures and initializes the browser.
 
@@ -129,7 +194,7 @@ class SeleniumDriver(ABC):
         self._wait_driver = WebDriverWait(self.browser, self.wait_seconds)
         return self
 
-    def _validate_setup(self):
+    def _validate_setup(self) -> None:
         """
         Validates that the minimum required attributes are correctly defined.
 
@@ -144,8 +209,10 @@ class SeleniumDriver(ABC):
             raise Exception(f"Variable 'wait_seconds' is not valid value - value:{self.wait_seconds}.")
         if not self.initial_url:
             raise Exception("Not 'initial_url' defined.")
+        if self.DOWNLOAD_DIRECTORY_REQUIRED and not self._browser and not self.download_directory:
+            raise Exception("Not 'download_directory' defined.")
 
-    def _validate_fields(self, params: Mapping[str, Any]):
+    def _validate_fields(self, params: Mapping[str, Any]) -> None:
         """
         Validates that all required fields are present in ``params``.
 
@@ -160,11 +227,11 @@ class SeleniumDriver(ABC):
             if field not in params:
                 raise Exception(f"Field {field} is required")
 
-    def teardown_class(self):
+    def teardown_class(self) -> None:
         """Closes the browser and releases associated resources."""
         self.browser.close()
 
-    def _launch_browser(self):
+    def _launch_browser(self) -> None:
         """
         Launches and initializes the browser instance.
 
@@ -175,7 +242,7 @@ class SeleniumDriver(ABC):
         """
         raise NotImplementedError("SeleniumDriver isn't a valid driver class. Use ChromeDriver or FirefoxDriver classes")
 
-    def run(self, raise_exceptions: bool = True, **params: Any):
+    def run(self, raise_exceptions: bool = True, **params: Any) -> tuple[Any, Optional[Exception]]:
         """
         Executes the main scraping logic defined in :meth:`_run`.
 
@@ -208,11 +275,14 @@ class SeleniumDriver(ABC):
         except Exception as e:
             if raise_exceptions:
                 raise e
-            self.logger.error(f"[{self.__class__.__name__}] Error occurred while running scrapper: {e}")
+            self.logger.exception(
+                "[%s] Error occurred while running scrapper",
+                self.__class__.__name__,
+            )
             exception_generated = e
         return scrapper_data, exception_generated
 
-    def _run(self, **params: Any):
+    def _run(self, **params: Any) -> Any:
         """
         Contains the core scraping logic.
 
@@ -227,17 +297,17 @@ class SeleniumDriver(ABC):
         raise NotImplementedError("Method _run must be implemented")
 
     @property
-    def browser(self):
+    def browser(self) -> Optional[WebDriver]:
         """WebDriver: Active Selenium browser instance."""
         return self._browser
 
     @property
-    def wait_driver(self):
+    def wait_driver(self) -> Optional[WebDriverWait]:
         """WebDriverWait: Explicit wait instance associated with the browser."""
         return self._wait_driver
 
     @property
-    def download_directory(self):
+    def download_directory(self) -> str:
         """
         str: Absolute path to the download directory.
 
@@ -245,27 +315,32 @@ class SeleniumDriver(ABC):
             Exception: If ``_download_directory`` is not defined.
             Exception: If the specified path does not exist on the file system.
         """
+        if not self._download_directory:
+            raise Exception("Not 'download_directory' defined.")
         if self._download_directory and not os.path.exists(self._download_directory):
             raise Exception(f"Download directory '{self._download_directory}' doesn't exist.")
         return self._download_directory
 
     @property
-    def download_tmp_directory(self):
+    def download_tmp_directory(self) -> str:
         """str: Path to the temporary download directory (defaults to ``download_directory``)."""
         return self.download_directory
 
-    def clean_download_directory(self):
+    # ----------------------------------------------------------------- Utils
+    # Reusable helpers for files, user agents, delays, logging, and display.
+
+    def clean_download_directory(self) -> None:
         """Removes all files present in the temporary download directory."""
         download_path = Path(self.download_tmp_directory)
         if any(download_path.iterdir()):
             for file in download_path.iterdir():
                 file.unlink()
 
-    def get_random_user_agent(self):
+    def get_random_user_agent(self) -> str:
         user_agent = random.choice(_SELENIUM_USER_AGENTS)
         return user_agent
 
-    def get_random_sleep_time(self, min_seconds: float = 1.0, max_seconds: float = 3.0) -> float:
+    def get_random_time(self, min_seconds: float = 1.0, max_seconds: float = 3.0) -> float:
         """
         Generates a random sleep time between the specified minimum and maximum.
 
@@ -288,8 +363,8 @@ class SeleniumDriver(ABC):
             min_seconds (float): Minimum wait time in seconds. Defaults to ``1.0``.
             max_seconds (float): Maximum wait time in seconds. Defaults to ``3.0``.
         """
-        delay = self.get_random_sleep_time(min_seconds, max_seconds)
-        self.get_logger().debug(f"Sleeping {delay:.2f}s to avoid detection...")
+        delay = self.get_random_time(min_seconds, max_seconds)
+        self.logger.debug("Sleeping %.2fs to avoid detection...", delay)
         time.sleep(delay)
 
     def sleep(self, seconds: float) -> None:
@@ -299,10 +374,31 @@ class SeleniumDriver(ABC):
         Args:
             seconds (float): Time to sleep in seconds.
         """
-        self.get_logger().debug(f"Sleeping for {seconds:.2f}s...")
+        self.logger.debug("Sleeping for %.2fs...", seconds)
         time.sleep(seconds)
 
-    def go_to_url(self, url: str, delay_seconds_added: float = None) -> None:
+    def get_logger(self) -> logging.Logger:
+        """
+        Retrieves the logger configured for this driver.
+
+        Returns:
+            logging.Logger: The configured logger, or this module's logger.
+        """
+        return self.logger
+
+    def __repr__(self) -> str:
+        """
+        Returns a string representation of the driver.
+
+        Returns:
+            str: String containing the class name, driver type, and initial URL.
+        """
+        return f"{self.__class__.__name__} (Driver: {self._driver_type}, Initial URL: {self.initial_url})"
+
+    # --------------------------------------------------------------- Actions
+    # Browser navigation, element interaction, and network configuration.
+
+    def go_to_url(self, url: str, delay_seconds_added: Optional[float] = None) -> None:
         """
         Navigates the browser to the given URL and records the request in the
         statistics tracker.
@@ -319,64 +415,74 @@ class SeleniumDriver(ABC):
         self.statistics.add_request()
         self.browser.get(url)
 
-    def send_keys_script(self, element, value) -> None:
-        """
-        Sets the value of a form input element via JavaScript and dispatches
-        the ``input`` and ``change`` events so that React / Vue / Angular
-        frameworks detect the change correctly.
+    def send_keys(self, element: WebElement, value: str, use_script: bool = False) -> None:
+        """Send text to an element, optionally setting its value through JavaScript.
 
-        This is useful when :meth:`element.send_keys` is blocked or intercepted
-        by the page's JavaScript framework.
+        Script mode dispatches ``input`` and ``change`` events so that
+        JavaScript frameworks detect the change.
 
         Args:
-            element (WebElement): The target ``<input>`` DOM element.
-            value (str): The value to assign to the element.
+            element: The target input element.
+            value: The text or value to enter.
+            use_script (bool): If ``True``, set the value using JavaScript;
+                otherwise call the element's ``send_keys`` method.
         """
-        self.browser.execute_script(
-            """
-            const element = arguments[0];
-            const value = arguments[1];
-            const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-            valueSetter.call(element, value);
-            element.dispatchEvent(new Event('input', { bubbles: true }));
-            element.dispatchEvent(new Event('change', { bubbles: true }));
-            """,
-            element,
-            value,
-        )
+        if not use_script:
+            element.send_keys(value)
+        else:
+            self.browser.execute_script(
+                """
+                const element = arguments[0];
+                const value = arguments[1];
+                const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+                valueSetter.call(element, value);
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+                """,
+                element,
+                value,
+            )
 
-    def click_element_script(self, element) -> None:
-        """
-        Clicks a DOM element by dispatching a programmatic JavaScript click.
-
-        Use this method when the standard
-        :meth:`~selenium.webdriver.remote.webelement.WebElement.click` is
-        intercepted or blocked by an overlay element.
+    def click_element(self, element: WebElement, use_script: bool = False) -> None:
+        """Click an element normally or through a JavaScript click.
 
         Args:
-            element (WebElement): The DOM element to click.
+            element: The DOM element to click.
+            use_script (bool): If ``True``, dispatch a click through JavaScript;
+                otherwise call the element's ``click`` method.
         """
-        self.browser.execute_script("arguments[0].click();", element)
+        if not use_script:
+            element.click()
+        else:
+            self.browser.execute_script("arguments[0].click();", element)
 
-    def get_logger(self):
+    def scroll_to_top(self) -> None:
+        """Scroll the current page to the top."""
+        self.browser.execute_script("window.scrollTo(0, 0);")
+
+    def scroll_to(self, target: WebElement | int, y: Optional[int] = None) -> None:
+        """Scroll to an element or to the given page coordinates.
+
+        Args:
+            target: Element to bring into view, or the horizontal coordinate
+                when scrolling to a position.
+            y: Vertical coordinate. Required when ``target`` is an ``x`` value.
+
+        Raises:
+            ValueError: If a horizontal coordinate is supplied without ``y``.
         """
-        Retrieves the logger configured for the scraper.
+        if isinstance(target, WebElement):
+            self.browser.execute_script("arguments[0].scrollIntoView();", target)
+            return
+        if y is None:
+            raise ValueError("The y coordinate is required when scrolling to coordinates")
+        self.browser.execute_script("window.scrollTo(arguments[0], arguments[1]);", target, y)
 
-        Returns:
-            logging.Logger: Logger instance named ``'scrapper'``.
-        """
-        return logging.getLogger("scrapper")
+    def scroll_to_bottom(self) -> None:
+        """Scroll the current page to the bottom of its document."""
+        self.browser.execute_script("window.scrollTo(0, document.body.scrollHeight);")
 
-    def __repr__(self):
-        """
-        Returns a string representation of the driver.
-
-        Returns:
-            str: String containing the class name, driver type, and initial URL.
-        """
-        return f"{self.__class__.__name__} (Driver: {self._driver_type}, Initial URL: {self.initial_url})"
-
-    def _setup_network_extension_filter(self):
+    def _setup_network_extension_filter(self) -> None:
         """
         Registers CDP ``Network.setBlockedURLs`` patterns derived from
         :attr:`NETWORK_BLOCKED_EXTENSIONS` so that Chrome aborts matching
@@ -398,7 +504,7 @@ class SeleniumDriver(ABC):
             return
 
         if not hasattr(self._browser, "execute_cdp_cmd"):
-            self.get_logger().warning("[NetworkFilter] Browser does not support CDP. Extension filter skipped.")
+            self.logger.warning("[NetworkFilter] Browser does not support CDP. Extension filter skipped.")
             return
 
         patterns = []
@@ -409,7 +515,11 @@ class SeleniumDriver(ABC):
 
         self._browser.execute_cdp_cmd("Network.enable", {})
         self._browser.execute_cdp_cmd("Network.setBlockedURLs", {"urls": patterns})
-        self.get_logger().info(f"[NetworkFilter] Blocked extensions: {self.NETWORK_BLOCKED_EXTENSIONS} → {len(patterns)} URL patterns registered.")
+        self.logger.info(
+            "[NetworkFilter] Blocked extensions: %s → %d URL patterns registered.",
+            self.NETWORK_BLOCKED_EXTENSIONS,
+            len(patterns),
+        )
 
     def set_blocked_extensions(self, *extensions: str) -> None:
         """
@@ -440,7 +550,7 @@ class SeleniumDriver(ABC):
         self.NETWORK_BLOCKED_EXTENSIONS = []
         if hasattr(self._browser, "execute_cdp_cmd"):
             self._browser.execute_cdp_cmd("Network.setBlockedURLs", {"urls": []})
-        self.get_logger().info("[NetworkFilter] Blocked extensions cleared.")
+        self.logger.info("[NetworkFilter] Blocked extensions cleared.")
 
     def _build_host_rules_argument(self) -> Optional[str]:
         """
@@ -471,5 +581,5 @@ class SeleniumDriver(ABC):
             return None
         excludes = ", ".join(f"EXCLUDE {domain}" for domain in self.NETWORK_DOMAIN_WHITELIST)
         host_rules = f"MAP * ~NOTFOUND, {excludes}"
-        self.get_logger().info(f"[NetworkFilter] Domain whitelist active: {self.NETWORK_DOMAIN_WHITELIST}")
+        self.logger.info("[NetworkFilter] Domain whitelist active: %s", self.NETWORK_DOMAIN_WHITELIST)
         return host_rules
