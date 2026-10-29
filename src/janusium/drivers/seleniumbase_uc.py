@@ -123,7 +123,7 @@ class SeleniumBaseUCDriver(SeleniumDriver):
         }
         arguments = list(self._iter_browser_arguments())
         if arguments:
-            options["chromium_arg"] = ",".join(argument.removeprefix("--") for argument in arguments)
+            options["chromium_arg"] = arguments
 
         if self.user_agent:
             options["agent"] = self.user_agent

@@ -5,6 +5,7 @@ _LAZY_IMPORTS = {
     "FirefoxDriver": "janusium.drivers.firefox",
     "UndetectedChromeDriver": "janusium.drivers.undetected_chrome",
     "SeleniumBaseUCDriver": "janusium.drivers.seleniumbase_uc",
+    "SeleniumBaseCDPDriver": "janusium.drivers.seleniumbase_cdp",
 }
 
 __all__ = list(_LAZY_IMPORTS)

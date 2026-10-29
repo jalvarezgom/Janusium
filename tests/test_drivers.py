@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from janusium.drivers import ChromeDriver, FirefoxDriver, UndetectedChromeDriver
+from janusium.drivers import ChromeDriver, FirefoxDriver, SeleniumBaseUCDriver, UndetectedChromeDriver
 from janusium.drivers.selenium import SeleniumDriver
 from janusium.statistics import StatisticsSelenium
 
@@ -162,6 +162,7 @@ def test_firefox_driver_applies_user_agent_and_languages_as_preferences():
         ("janusium.drivers.chrome", "webdriver_manager", "chrome"),
         ("janusium.drivers.undetected_chrome", "undetected_chromedriver", "undetected"),
         ("janusium.drivers.seleniumbase_uc", "seleniumbase", "seleniumbase"),
+        ("janusium.drivers.seleniumbase_cdp", "seleniumbase", "seleniumbase"),
     ],
 )
 def test_missing_optional_dependency_explains_how_to_install_it(module, blocked, extra, monkeypatch):
@@ -171,3 +172,19 @@ def test_missing_optional_dependency_explains_how_to_install_it(module, blocked,
 
     with pytest.raises(ImportError, match=rf"pip install janusium\[{extra}\]"):
         importlib.import_module(module)
+
+
+def test_seleniumbase_uc_driver_passes_arguments_with_commas_as_a_list(monkeypatch):
+    pytest.importorskip("seleniumbase")
+    from janusium.drivers import seleniumbase_uc
+
+    captured = {}
+    monkeypatch.setattr(seleniumbase_uc, "Driver", lambda **options: captured.update(options) or MagicMock())
+
+    driver = SeleniumBaseUCDriver(custom_arguments=["--window-size=1920,1080", "--accept-lang=es-ES,es"])
+    driver._launch_browser()
+    driver._owns_browser = False
+
+    assert isinstance(captured["chromium_arg"], list)
+    assert "--window-size=1920,1080" in captured["chromium_arg"]
+    assert "--accept-lang=es-ES,es" in captured["chromium_arg"]
