@@ -8,10 +8,13 @@ from abc import ABC
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Optional
 
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.wait import WebDriverWait
 
+from janusium import humanize
 from janusium.statistics import StatisticsSelenium
 
 _SELENIUM_USER_AGENTS = [
@@ -170,6 +173,7 @@ class SeleniumDriver(ABC):
         if any(not isinstance(language, str) or not language for language in self.languages):
             raise ValueError("languages must contain non-empty strings")
         self.timezone = timezone
+        self._mouse_position: Optional[humanize.Point] = None
 
     def add_argument(self, argument: str) -> SeleniumDriver:
         """Add a custom browser command-line argument before setup."""
@@ -476,19 +480,31 @@ class SeleniumDriver(ABC):
         self.statistics.add_request()
         self.browser.get(url)
 
-    def send_keys(self, element: WebElement, value: str, use_script: bool = False) -> None:
-        """Send text to an element, optionally setting its value through JavaScript.
+    def send_keys(self, element: WebElement, value: str, use_script: bool = False, human: bool = False) -> None:
+        """Send text to an element.
 
-        Script mode dispatches ``input`` and ``change`` events so that
-        JavaScript frameworks detect the change.
+        Three modes are available: the plain ``send_keys`` of the element (the
+        whole text at once), script mode, and human mode.
+
+        Script mode sets the value through JavaScript and dispatches ``input``
+        and ``change`` events so that JavaScript frameworks detect the change.
+        It generates no keyboard events. Human mode types character by character
+        through real key events with a variable rhythm; see :meth:`human_type`.
 
         Args:
             element: The target input element.
             value: The text or value to enter.
-            use_script (bool): If ``True``, set the value using JavaScript;
-                otherwise call the element's ``send_keys`` method.
+            use_script (bool): If ``True``, set the value using JavaScript.
+            human (bool): If ``True``, type with a variable human rhythm.
+
+        Raises:
+            ValueError: If both ``use_script`` and ``human`` are ``True``.
         """
-        if not use_script:
+        if use_script and human:
+            raise ValueError("use_script and human are mutually exclusive")
+        if human:
+            self.human_type(element, value)
+        elif not use_script:
             element.send_keys(value)
         else:
             self.browser.execute_script(
@@ -504,18 +520,104 @@ class SeleniumDriver(ABC):
                 value,
             )
 
-    def click_element(self, element: WebElement, use_script: bool = False) -> None:
-        """Click an element normally or through a JavaScript click.
+    def human_type(self, element: WebElement, value: str, min_delay: float = 0.05, max_delay: float = 0.2) -> None:
+        """Type text one character at a time with a variable rhythm.
+
+        Every character is sent as a real key event. The pause after each one is
+        random within ``[min_delay, max_delay]``, longer after spaces and
+        punctuation, with an occasional longer hesitation.
+
+        Args:
+            element: The target input element.
+            value: The text to type.
+            min_delay (float): Minimum pause between characters, in seconds.
+            max_delay (float): Maximum regular pause between characters, in seconds.
+        """
+        for char, delay in zip(value, humanize.typing_delays(value, min_delay, max_delay)):
+            element.send_keys(char)
+            time.sleep(delay)
+
+    def click_element(self, element: WebElement, use_script: bool = False, human: bool = False) -> None:
+        """Click an element normally, through JavaScript, or like a person would.
 
         Args:
             element: The DOM element to click.
-            use_script (bool): If ``True``, dispatch a click through JavaScript;
-                otherwise call the element's ``click`` method.
+            use_script (bool): If ``True``, dispatch a click through JavaScript.
+            human (bool): If ``True``, move the mouse to the element along a
+                curved path and click with real pointer events; see
+                :meth:`move_mouse_to`.
+
+        Raises:
+            ValueError: If both ``use_script`` and ``human`` are ``True``.
         """
-        if not use_script:
+        if use_script and human:
+            raise ValueError("use_script and human are mutually exclusive")
+        if human:
+            self.move_mouse_to(element, click=True)
+        elif not use_script:
             element.click()
         else:
             self.browser.execute_script("arguments[0].click();", element)
+
+    def move_mouse_to(self, element: WebElement, click: bool = False) -> None:
+        """Move the mouse to a random point of an element along a curved path.
+
+        The element is first scrolled into view gradually when it is outside the
+        viewport. The pointer travels from its last known position (a random
+        viewport point on first use) with eased speed, and the whole movement is
+        replayed as real pointer events in a single browser round trip.
+
+        Args:
+            element: The element to move the mouse over.
+            click: If ``True``, press and release the left button on arrival,
+                after a short human-like pause.
+        """
+        rect = self._viewport_rect(element)
+        if rect["top"] < 0 or rect["bottom"] > rect["viewport_height"]:
+            self.scroll_gradually(element)
+            rect = self._viewport_rect(element)
+
+        target = (
+            round(rect["left"] + rect["width"] * random.uniform(0.3, 0.7)),
+            round(rect["top"] + rect["height"] * random.uniform(0.3, 0.7)),
+        )
+        start = self._mouse_position or (
+            round(random.uniform(0, rect["viewport_width"])),
+            round(random.uniform(0, rect["viewport_height"])),
+        )
+
+        actions = ActionChains(self.browser, duration=0)
+        pointer = actions.w3c_actions.pointer_action
+        pointer.move_to_location(*start)
+        for x, y in humanize.mouse_path(start, target):
+            pointer.move_to_location(x, y)
+            pointer.pause(random.uniform(0.004, 0.018))
+        if click:
+            pointer.pause(random.uniform(0.05, 0.15))
+            pointer.pointer_down()
+            pointer.pause(random.uniform(0.04, 0.12))
+            pointer.pointer_up()
+        actions.perform()
+        self._mouse_position = target
+
+    def _viewport_rect(self, element: WebElement) -> dict[str, float]:
+        """Return the element's viewport rectangle plus the viewport size."""
+        left, top, width, height, viewport_width, viewport_height = self.browser.execute_script(
+            """
+            const rect = arguments[0].getBoundingClientRect();
+            return [rect.left, rect.top, rect.width, rect.height, window.innerWidth, window.innerHeight];
+            """,
+            element,
+        )
+        return {
+            "left": left,
+            "top": top,
+            "bottom": top + height,
+            "width": width,
+            "height": height,
+            "viewport_width": viewport_width,
+            "viewport_height": viewport_height,
+        }
 
     def scroll_to_top(self) -> None:
         """Scroll the current page to the top."""
@@ -542,6 +644,34 @@ class SeleniumDriver(ABC):
     def scroll_to_bottom(self) -> None:
         """Scroll the current page to the bottom of its document."""
         self.browser.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+
+    def scroll_gradually(self, target: WebElement | int) -> None:
+        """Scroll with real mouse wheel events in small, uneven steps.
+
+        Unlike :meth:`scroll_to`, which jumps instantly, the movement is split
+        into eased wheel steps with short random pauses between them, and the
+        wheel is positioned over the last mouse position when it is known.
+
+        Args:
+            target: Element to bring to the middle of the viewport, or a number
+                of pixels to scroll (positive down, negative up).
+        """
+        if isinstance(target, WebElement):
+            rect = self._viewport_rect(target)
+            distance = round(rect["top"] + rect["height"] / 2 - rect["viewport_height"] / 2)
+        else:
+            distance = int(target)
+        if distance == 0:
+            return
+
+        viewport_width, viewport_height = self.browser.execute_script("return [window.innerWidth, window.innerHeight];")
+        x, y = self._mouse_position or (viewport_width // 2, viewport_height // 2)
+        origin = ScrollOrigin.from_viewport(min(max(x, 0), viewport_width - 1), min(max(y, 0), viewport_height - 1))
+        for step in humanize.scroll_steps(distance):
+            ActionChains(self.browser).scroll_from_origin(origin, 0, step).perform()
+            time.sleep(random.uniform(0.01, 0.06))
+            if random.random() < 0.05:
+                time.sleep(random.uniform(0.2, 0.5))
 
     def _setup_network_extension_filter(self) -> None:
         """

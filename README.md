@@ -104,8 +104,16 @@ Firefox applies `user_agent` and `languages` as preferences and ignores
 
 - `go_to_url()`: navigate and count the request in `statistics`.
 - `click_element()`, `send_keys()`: interact with elements; pass `use_script=True`
-  to go through JavaScript.
-- `scroll_to()`, `scroll_to_top()`, `scroll_to_bottom()`: page scrolling.
+  to go through JavaScript (no real keyboard events), or `human=True` for
+  human-like input (mutually exclusive with `use_script`).
+- `human_type()`: types character by character with real key events and a
+  variable rhythm (longer after spaces and punctuation, occasional hesitations).
+  `send_keys(..., human=True)` calls it.
+- `move_mouse_to()`: moves the mouse along a curved, eased path with real pointer
+  events; `click=True` (or `click_element(..., human=True)`) also clicks.
+- `scroll_gradually()`: scrolls with real wheel events in small uneven steps, to
+  an element or by a number of pixels.
+- `scroll_to()`, `scroll_to_top()`, `scroll_to_bottom()`: instant page scrolling.
 - `random_sleep()`, `sleep()`: pauses to simulate human pacing.
 - `clean_download_directory()`: removes files (not subdirectories) from the
   download directory.
