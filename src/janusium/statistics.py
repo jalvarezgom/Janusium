@@ -1,12 +1,13 @@
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional
 
 
 @dataclass
 class StatisticsSelenium:
-    START_TIME: datetime = None
-    END_TIME: datetime = None
-    TOTAL_REQUESTS = 0
+    START_TIME: Optional[datetime] = None
+    END_TIME: Optional[datetime] = None
+    TOTAL_REQUESTS: int = 0
 
     def add_request(self):
         self.TOTAL_REQUESTS += 1

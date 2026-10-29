@@ -1,8 +1,16 @@
+import os
+
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 
-from src.libs.SeleniumConnectPy.drivers.selenium import SeleniumDriver
+try:
+    from webdriver_manager.chrome import ChromeDriverManager
+except ImportError as exc:
+    raise ImportError(
+        "webdriver-manager is required for this driver. Install it with: pip install janusium[chrome]"
+    ) from exc
+
+from janusium.drivers.selenium import SeleniumDriver
 
 
 class ChromeDriver(SeleniumDriver):
@@ -17,12 +25,13 @@ class ChromeDriver(SeleniumDriver):
     - ``--disable-blink-features=AutomationControlled`` removes the
       ``navigator.webdriver`` flag.
     - ``excludeSwitches: ["enable-automation"]`` hides the automation banner.
-    - A realistic ``User-Agent`` string is injected via Chrome options.
-    - ``navigator.webdriver``, ``navigator.languages``, and
-      ``navigator.plugins`` are patched via CDP on every new document.
+    - The browser's own ``User-Agent`` is kept unless ``user_agent`` is given,
+      so it stays consistent with the real engine version and Client Hints.
+    - ``locale``, ``languages`` and ``timezone`` are applied through native
+      Chrome switches / CDP instead of patching ``navigator`` from JavaScript.
 
     Inherits all network filtering capabilities from
-    :class:`~SeleniumConnectPy.drivers.selenium.SeleniumDriver`:
+    :class:`~janusium.drivers.selenium.SeleniumDriver`:
     use :attr:`NETWORK_BLOCKED_EXTENSIONS` and
     :attr:`NETWORK_DOMAIN_WHITELIST` to restrict outbound requests.
     """
@@ -43,8 +52,8 @@ class ChromeDriver(SeleniumDriver):
 
         Steps performed:
 
-        1. Builds ``ChromeOptions`` with stealth arguments and a realistic
-           ``User-Agent``.
+        1. Builds ``ChromeOptions`` with stealth arguments and the optional
+           ``user_agent`` / ``locale`` / ``languages`` settings.
         2. Applies the domain whitelist via ``--host-rules`` if
            :attr:`NETWORK_DOMAIN_WHITELIST` is set.
         3. Configures automatic file downloads to
@@ -53,19 +62,17 @@ class ChromeDriver(SeleniumDriver):
            ``ChromeDriverManager`` and creates the ``Chrome`` instance.
         5. Applies extension-based request blocking via CDP
            (:meth:`~SeleniumDriver._setup_network_extension_filter`).
-        6. Overrides ``navigator.webdriver``, ``navigator.languages``, and
-           ``navigator.plugins`` via ``Page.addScriptToEvaluateOnNewDocument``
-           to reduce the automation fingerprint.
+        6. Applies the optional ``timezone`` override via CDP.
         """
         options = webdriver.ChromeOptions()
 
-        for argument in (*self._iter_browser_arguments(), f"--user-agent={self.get_random_user_agent()}"):
+        for argument in (*self._iter_browser_arguments(), *self._iter_identity_arguments()):
             options.add_argument(argument)
         host_rules = self._build_host_rules_argument()
         if host_rules:
             options.add_argument(f"--host-rules={host_rules}")
 
-        download_directory = self.download_tmp_directory.replace("/", "\\")
+        download_directory = os.path.normpath(self.download_tmp_directory)
         options.add_experimental_option(
             "prefs",
             {
@@ -81,19 +88,4 @@ class ChromeDriver(SeleniumDriver):
         service = Service(ChromeDriverManager().install())
         self._browser = webdriver.Chrome(service=service, options=options)
         self._setup_network_extension_filter()
-        self._browser.execute_cdp_cmd(
-            "Page.addScriptToEvaluateOnNewDocument",
-            {
-                "source": """
-                    Object.defineProperty(navigator, 'webdriver', {
-                        get: () => undefined
-                    });
-                    Object.defineProperty(navigator, 'languages', {
-                        get: () => ['es-ES', 'es', 'en-US', 'en']
-                    });
-                    Object.defineProperty(navigator, 'plugins', {
-                        get: () => [1, 2, 3, 4, 5]
-                    });
-                """
-            },
-        )
+        self._apply_timezone()

@@ -1,7 +1,10 @@
+import os
+from typing import Any, Iterable, Optional
+
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 
-from src.libs.SeleniumConnectPy.drivers.selenium import SeleniumDriver
+from janusium.drivers.selenium import SeleniumDriver
 from selenium.webdriver.firefox.service import Service as FirefoxService
 
 
@@ -18,7 +21,7 @@ class FirefoxDriver(SeleniumDriver):
     .. note::
         Firefox does not support the Chrome DevTools Protocol (CDP).
         Network filtering features inherited from
-        :class:`~SeleniumConnectPy.drivers.selenium.SeleniumDriver`
+        :class:`~janusium.drivers.selenium.SeleniumDriver`
         (:attr:`NETWORK_BLOCKED_EXTENSIONS`, :attr:`NETWORK_DOMAIN_WHITELIST`)
         are silently skipped when using this driver.
     """
@@ -44,37 +47,37 @@ class FirefoxDriver(SeleniumDriver):
         ("pdfjs.disabled", True),
     )
 
-    def __init__(self, **options):
+    def __init__(
+        self,
+        executable_path: Optional[str] = None,
+        log_path: Optional[str] = None,
+        service_args: Optional[list[str]] = None,
+        custom_preferences: Optional[Iterable[tuple[str, Any]]] = None,
+        **kwargs: Any,
+    ):
         """
         Initializes the Firefox driver with optional GeckoDriver service
         parameters.
 
         Args:
-            **options: Optional keyword arguments for the GeckoDriver service:
-
-                - ``executable_path`` (str): Absolute path to the
-                  ``geckodriver`` binary.  When omitted, Selenium resolves
-                  the binary from the system ``PATH``.
-                - ``log_path`` (str): Path to the GeckoDriver log file.
-                - ``service_args`` (list[str]): Additional arguments passed
-                  to the GeckoDriver service process.
+            executable_path (str, optional): Absolute path to the
+                ``geckodriver`` binary.  When omitted, Selenium resolves the
+                binary from the system ``PATH``.
+            log_path (str, optional): Path to the GeckoDriver log file.
+            service_args (list[str], optional): Additional arguments passed
+                to the GeckoDriver service process.
+            custom_preferences (Iterable[tuple[str, Any]], optional): Extra
+                Firefox ``(name, value)`` preferences applied on launch.
+            **kwargs: Forwarded to :class:`SeleniumDriver` (``browser``,
+                ``headless_browser``, ``wait_seconds``, ``download_directory``,
+                ``logger``, ``custom_arguments``). Unknown options raise
+                ``TypeError``.
         """
-        self.executable_path = None
-        self.log_path = None
-        self.service_args = None
-        self.custom_preferences = list(options.get("custom_preferences") or ())
-        if options:
-            self.executable_path = options.get("executable_path")
-            self.log_path = options.get("log_path")
-            self.service_args = options.get("service_args")
-        super().__init__(
-            browser=options.get("browser"),
-            headless_browser=options.get("headless_browser", True),
-            wait_seconds=options.get("wait_seconds", 3),
-            download_directory=options.get("download_directory"),
-            logger=options.get("logger"),
-            custom_arguments=options.get("custom_arguments"),
-        )
+        self.executable_path = executable_path
+        self.log_path = log_path
+        self.service_args = service_args
+        self.custom_preferences = list(custom_preferences or ())
+        super().__init__(**kwargs)
 
     def add_argument(self, name: str, value):
         """Add a Firefox preference; browser CLI arguments are handled internally."""
@@ -93,6 +96,11 @@ class FirefoxDriver(SeleniumDriver):
     def _iter_preferences(self):
         yield from self.DEFAULT_PREFERENCES
         yield from self.custom_preferences
+        if self.user_agent:
+            yield ("general.useragent.override", self.user_agent)
+        languages = self._resolved_languages()
+        if languages:
+            yield ("intl.accept_languages", ",".join(languages))
 
     def setup(self):
         """
@@ -125,9 +133,11 @@ class FirefoxDriver(SeleniumDriver):
            :class:`~selenium.webdriver.firefox.service.Service` with the
            supplied parameters; otherwise relies on the system ``PATH``.
         """
-        download_directory = self.download_directory.replace("/", "\\")
+        download_directory = os.path.normpath(self.download_directory)
         options = Options()
         # options.set_preference("browser.privatebrowsing.autostart", True)
+        if self.timezone:
+            self.logger.warning("[Identity] Firefox does not support CDP. Timezone override skipped.")
         for name, value in self._iter_preferences():
             options.set_preference(name, value)
         options.set_preference("browser.download.dir", rf"{download_directory}")

@@ -1,3 +1,4 @@
+from dataclasses import fields
 from datetime import datetime, timedelta
 
 from janusium.statistics import StatisticsSelenium
@@ -65,3 +66,8 @@ def test_repr_contains_class_name_and_values():
 
     assert "StatisticsSelenium" in representation
     assert "TOTAL_REQUESTS=1" in representation
+
+
+def test_total_requests_is_a_dataclass_field():
+    assert "TOTAL_REQUESTS" in {f.name for f in fields(StatisticsSelenium)}
+    assert StatisticsSelenium(TOTAL_REQUESTS=5).TOTAL_REQUESTS == 5

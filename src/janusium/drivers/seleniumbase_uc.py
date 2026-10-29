@@ -1,9 +1,13 @@
 from typing import Optional
 
-from seleniumbase import Driver
+try:
+    from seleniumbase import Driver
+except ImportError as exc:
+    raise ImportError(
+        "seleniumbase is required for this driver. Install it with: pip install janusium[seleniumbase]"
+    ) from exc
 
-from environment import Environment
-from src.libs.SeleniumConnectPy.drivers.selenium import SeleniumDriver
+from janusium.drivers.selenium import SeleniumDriver
 
 
 class SeleniumBaseUCDriver(SeleniumDriver):
@@ -13,10 +17,10 @@ class SeleniumBaseUCDriver(SeleniumDriver):
     ``seleniumbase.Driver(uc=True)``. It inherits the shared setup, navigation,
     wait, statistics, and network-filtering behavior from the base class.
 
-    Browser launch configuration includes headless mode, a randomly selected
-    user-agent from the base class, a 1920x1080 window, and UC subprocess mode.
+    Browser launch configuration includes headless mode, the optional
+    user-agent and locale, a 1920x1080 window, and UC subprocess mode.
     If configured, the Chrome version pin from
-    ``Environment.SETTINGS.BROWSER.CHROME_VERSION``, the domain whitelist,
+    ``chrome_version``, the domain whitelist,
     proxy, and download directory are also applied. Extension-based network
     filtering is activated after launch when configured.
 
@@ -60,6 +64,11 @@ class SeleniumBaseUCDriver(SeleniumDriver):
         logger=None,
         proxy: Optional[str] = None,
         custom_arguments=None,
+        chrome_version: Optional[int] = None,
+        user_agent: Optional[str] = None,
+        locale: Optional[str] = None,
+        languages=None,
+        timezone: Optional[str] = None,
     ):
         """Initialize inherited Selenium settings and optional proxy config.
 
@@ -72,6 +81,7 @@ class SeleniumBaseUCDriver(SeleniumDriver):
             proxy: Optional SeleniumBase proxy in ``HOST:PORT`` or
                 ``USER:PASSWORD@HOST:PORT`` format. It is only used when this
                 class launches a new browser.
+            chrome_version: Optional Chrome major version to pin the driver to.
 
         Returns:
             None.
@@ -83,8 +93,13 @@ class SeleniumBaseUCDriver(SeleniumDriver):
             download_directory=download_directory,
             logger=logger,
             custom_arguments=custom_arguments,
+            user_agent=user_agent,
+            locale=locale,
+            languages=languages,
+            timezone=timezone,
         )
         self.proxy = proxy
+        self.chrome_version = chrome_version
         self._owns_browser = browser is None
 
     def __del__(self):
@@ -103,7 +118,6 @@ class SeleniumBaseUCDriver(SeleniumDriver):
         options = {
             "uc": True,
             "headless": self.headless_browser,
-            "agent": self.get_random_user_agent(),
             "window_size": "1920,1080",
             "uc_subprocess": True,
         }
@@ -111,11 +125,15 @@ class SeleniumBaseUCDriver(SeleniumDriver):
         if arguments:
             options["chromium_arg"] = ",".join(argument.removeprefix("--") for argument in arguments)
 
+        if self.user_agent:
+            options["agent"] = self.user_agent
+        if self.locale:
+            options["locale_code"] = self.locale
         host_rules = self._build_host_rules_argument()
         if host_rules:
             options["host_resolver_rules"] = host_rules
 
-        chrome_version = Environment.SETTINGS.BROWSER.CHROME_VERSION
+        chrome_version = self.chrome_version
         if chrome_version:
             options["driver_version"] = str(chrome_version)
         if self.proxy:
@@ -131,3 +149,4 @@ class SeleniumBaseUCDriver(SeleniumDriver):
             )
 
         self._setup_network_extension_filter()
+        self._apply_timezone()

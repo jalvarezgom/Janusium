@@ -12,7 +12,7 @@ from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.wait import WebDriverWait
 
-from libs.SeleniumConnectPy.statistics import StatisticsSelenium
+from janusium.statistics import StatisticsSelenium
 
 _SELENIUM_USER_AGENTS = [
     # Chrome - Windows 10
@@ -113,7 +113,10 @@ class SeleniumDriver(ABC):
         download_directory: Optional[str] = None,
         logger: Optional[logging.Logger] = None,
         custom_arguments: Optional[Iterable[str]] = None,
-        **kwargs: Any,
+        user_agent: Optional[str] = None,
+        locale: Optional[str] = None,
+        languages: Optional[Iterable[str]] = None,
+        timezone: Optional[str] = None,
     ) -> None:
         """
         Initializes the driver with basic browser options.
@@ -133,20 +136,40 @@ class SeleniumDriver(ABC):
             custom_arguments (Iterable[str], optional): Browser command-line
                 arguments to add when the browser is launched. Each argument
                 must be a non-empty string.
-            **kwargs: Additional options accepted by concrete driver classes.
+            user_agent (str, optional): User-Agent to send. When omitted the
+                browser's own User-Agent is kept, which is the most coherent
+                choice; use :meth:`get_random_user_agent` for a random one.
+            locale (str, optional): Browser locale such as ``"es-ES"``.
+                Also used to derive ``languages`` when those are not given.
+            languages (Iterable[str], optional): Ordered ``Accept-Language`` /
+                ``navigator.languages`` values. Defaults to the locale and its
+                base language (``["es-ES", "es"]``) when ``locale`` is set.
+            timezone (str, optional): IANA timezone id such as
+                ``"Europe/Madrid"``. Applied through CDP on Chromium browsers.
         """
         if browser:
             self._browser = browser
         self.headless_browser = headless_browser
         self.wait_seconds = wait_seconds
         self._download_directory = self._download_directory or download_directory
-        self.logger = logger if logger is not None else logging.getLogger("janisium")
+        self.logger = logger if logger is not None else logging.getLogger("janusium")
         self.statistics = StatisticsSelenium()
         if isinstance(custom_arguments, str):
             raise TypeError("custom_arguments must be an iterable of argument strings, not a string")
         self.custom_arguments = list(custom_arguments or ())
         if any(not isinstance(argument, str) or not argument for argument in self.custom_arguments):
             raise ValueError("Browser arguments must be non-empty strings")
+        for name, value in (("user_agent", user_agent), ("locale", locale), ("timezone", timezone)):
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(f"{name} must be a non-empty string")
+        if isinstance(languages, str):
+            raise TypeError("languages must be an iterable of language strings, not a string")
+        self.user_agent = user_agent
+        self.locale = locale
+        self.languages = list(languages or ())
+        if any(not isinstance(language, str) or not language for language in self.languages):
+            raise ValueError("languages must contain non-empty strings")
+        self.timezone = timezone
 
     def add_argument(self, argument: str) -> SeleniumDriver:
         """Add a custom browser command-line argument before setup."""
@@ -171,6 +194,34 @@ class SeleniumDriver(ABC):
             yield self.HEADLESS_ARGUMENT
 
     HEADLESS_ARGUMENT = "--headless"
+
+    def _resolved_languages(self) -> list[str]:
+        """Return explicit languages, or ones derived from ``locale`` (``es-ES`` -> ``es-ES, es``)."""
+        if self.languages:
+            return list(self.languages)
+        if self.locale:
+            base_language = self.locale.split("-")[0]
+            return [self.locale] if base_language == self.locale else [self.locale, base_language]
+        return []
+
+    def _iter_identity_arguments(self) -> Iterator[str]:
+        """Yield Chromium arguments for the configured User-Agent, locale and languages."""
+        if self.user_agent:
+            yield f"--user-agent={self.user_agent}"
+        if self.locale:
+            yield f"--lang={self.locale}"
+        languages = self._resolved_languages()
+        if languages:
+            yield f"--accept-lang={','.join(languages)}"
+
+    def _apply_timezone(self) -> None:
+        """Override the browser timezone through CDP when ``timezone`` is set (Chromium only)."""
+        if not self.timezone:
+            return
+        if not hasattr(self._browser, "execute_cdp_cmd"):
+            self.logger.warning("[Identity] Browser does not support CDP. Timezone override skipped.")
+            return
+        self._browser.execute_cdp_cmd("Emulation.setTimezoneOverride", {"timezoneId": self.timezone})
 
     def setup(self) -> SeleniumDriver:
         """
@@ -228,8 +279,19 @@ class SeleniumDriver(ABC):
                 raise Exception(f"Field {field} is required")
 
     def teardown_class(self) -> None:
-        """Closes the browser and releases associated resources."""
-        self.browser.close()
+        """
+        Quits the browser and releases associated resources.
+
+        Safe to call when no browser was ever launched (``setup`` not run) and
+        safe to call more than once.
+        """
+        if self._browser is None:
+            return
+        try:
+            self._browser.quit()
+        finally:
+            self._browser = None
+            self._wait_driver = None
 
     def _launch_browser(self) -> None:
         """
@@ -330,11 +392,10 @@ class SeleniumDriver(ABC):
     # Reusable helpers for files, user agents, delays, logging, and display.
 
     def clean_download_directory(self) -> None:
-        """Removes all files present in the temporary download directory."""
-        download_path = Path(self.download_tmp_directory)
-        if any(download_path.iterdir()):
-            for file in download_path.iterdir():
-                file.unlink()
+        """Removes all files in the temporary download directory, leaving subdirectories untouched."""
+        for entry in Path(self.download_tmp_directory).iterdir():
+            if entry.is_file() or entry.is_symlink():
+                entry.unlink()
 
     def get_random_user_agent(self) -> str:
         user_agent = random.choice(_SELENIUM_USER_AGENTS)
